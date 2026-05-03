@@ -1,0 +1,61 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      - backend
+    ports:
+      - "8088:80"
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-nasnetstats}:${POSTGRES_PASSWORD:-please_change_this_password}@postgres:5432/${POSTGRES_DB:-nasnetstats}
+      APP_TIMEZONE: ${TZ:-Asia/Shanghai}
+      NAS_INTERFACE: ${NAS_INTERFACE:-all}
+      COLLECT_INTERVAL: ${COLLECT_INTERVAL:-5}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  collector:
+    build:
+      context: ./collector
+    network_mode: host
+    environment:
+      NAS_INTERFACE: ${NAS_INTERFACE:-all}
+      COLLECT_INTERVAL: ${COLLECT_INTERVAL:-5}
+      BACKEND_API: ${BACKEND_API:-http://127.0.0.1:8000}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nasnetstats}
+      POSTGRES_USER: ${POSTGRES_USER:-nasnetstats}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-please_change_this_password}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nasnetstats} -d ${POSTGRES_DB:-nasnetstats}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
