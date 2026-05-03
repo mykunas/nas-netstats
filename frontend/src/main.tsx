@@ -361,7 +361,7 @@ function DashboardHeader({
           <strong>{formatDateTime(latestRecordTime)}</strong>
         </span>
         <span className="header-meta-divider">|</span>
-        <span className="header-meta">
+        <span className={`header-meta refresh-meta ${refreshing ? "refreshing" : ""}`}>
           <span>刷新</span>
           <strong>{formatDateTime(lastRefreshTime)}</strong>
         </span>
@@ -602,7 +602,7 @@ function DashboardPage({
   onOpenHistory: () => void;
 }) {
   return (
-    <div className="dashboard-shell">
+    <div className={`dashboard-shell ${refreshing ? "refreshing-data" : ""}`}>
       <section className="dashboard-main">
         <DashboardHeader
           backendState={backendState}
@@ -1385,6 +1385,7 @@ function App() {
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const [manualRefreshSignal, setManualRefreshSignal] = useState(0);
   const [manualRefreshing, setManualRefreshing] = useState(false);
+  const [manualRefreshTime, setManualRefreshTime] = useState<Date | null>(null);
   const summaryQuery = useDashboardSummary();
   const systemStatusQuery = useSystemStatus();
   const isDashboardRoute = route === "/";
@@ -1397,7 +1398,13 @@ function App() {
     current_upload_speed: latestSpeedPoint?.upload_speed ?? summaryQuery.data.current_upload_speed,
     latest_record_time: latestSpeedPoint?.time ?? summaryQuery.data.latest_record_time
   };
-  const lastRefreshTime = newestDate(summaryQuery.lastUpdated, speedQuery.lastUpdated, realtimeQuery.lastUpdated, systemStatusQuery.lastUpdated);
+  const lastRefreshTime = newestDate(
+    manualRefreshTime,
+    summaryQuery.lastUpdated,
+    speedQuery.lastUpdated,
+    realtimeQuery.lastUpdated,
+    systemStatusQuery.lastUpdated
+  );
   const connectionError = summaryQuery.error ?? realtimeQuery.error ?? speedQuery.error ?? systemStatusQuery.error;
   const systemStatusError = systemStatusQuery.error;
   const hasAnySuccess = Boolean(lastRefreshTime);
@@ -1418,6 +1425,8 @@ function App() {
     }
 
     setManualRefreshing(true);
+    setManualRefreshTime(new Date());
+    setManualRefreshSignal((current) => current + 1);
     try {
       await Promise.all([
         summaryQuery.refetch({ force: true }),
@@ -1425,7 +1434,7 @@ function App() {
         speedQuery.refetch({ force: true }),
         realtimeQuery.refetch({ force: true })
       ]);
-      setManualRefreshSignal((current) => current + 1);
+      setManualRefreshTime(new Date());
     } finally {
       setManualRefreshing(false);
     }

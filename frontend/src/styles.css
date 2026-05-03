@@ -190,6 +190,19 @@ select {
   white-space: nowrap;
 }
 
+.refresh-meta {
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.refresh-meta.refreshing {
+  border-color: color-mix(in srgb, var(--color-download) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--color-download) 12%, var(--color-card-muted));
+  color: var(--color-download);
+}
+
 .header-meta-divider {
   color: var(--color-border-strong);
 }
@@ -939,6 +952,10 @@ select {
   opacity: 0.7;
 }
 
+.manual-refresh-button:disabled .manual-refresh-icon {
+  animation: refresh-spin 850ms linear infinite;
+}
+
 .manual-refresh-icon {
   position: relative;
   width: 13px;
@@ -958,6 +975,34 @@ select {
   border-right: 2px solid currentColor;
   content: "";
   transform: rotate(18deg);
+}
+
+.refreshing-data .metric-card,
+.refreshing-data .realtime-panel,
+.refreshing-data .history-summary-panel {
+  animation: data-refresh-pulse 900ms ease;
+}
+
+@keyframes refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes data-refresh-pulse {
+  0% {
+    border-color: color-mix(in srgb, var(--color-download) 46%, var(--color-border));
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-download) 22%, transparent);
+  }
+
+  100% {
+    border-color: var(--color-border);
+    box-shadow: var(--shadow-card);
+  }
 }
 
 .theme-toggle-knob {
