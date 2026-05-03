@@ -92,7 +92,7 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
       }
       inFlightRef.current = false;
     }
-  }, [enabled, failureThreshold, initialData, keepDataOnError]);
+  }, [enabled, failureThreshold, fetcher, initialData, keepDataOnError]);
 
   useEffect(() => {
     if (!enabled) {
@@ -130,7 +130,7 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       clearTimer();
     };
-  }, [clearTimer, enabled, hiddenIntervalMs, intervalMs, refetch]);
+  }, [clearTimer, enabled, fetcher, hiddenIntervalMs, intervalMs, refetch]);
 
   return {
     data,

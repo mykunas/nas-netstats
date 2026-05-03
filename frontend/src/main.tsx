@@ -6,7 +6,16 @@ import { BarChart, LineChart } from "echarts/charts";
 import { CanvasRenderer } from "echarts/renderers";
 import { useCurrentSpeed, useDashboardSummary, useRealtimeTraffic, useSystemStatus, useTrafficHistory } from "./hooks/useTrafficData";
 import type { BackendState, CalendarDay, HistoryItem, HistoryView, Period, RealtimePoint, RoutePath, ScaleMode, Summary, SystemStatus, ThemeMode } from "./types";
-import { formatBytes, formatDateTime, formatSpeed } from "./utils/format";
+import {
+  formatBytes,
+  formatDateTime,
+  formatHistoryAxisLabel,
+  formatSpeed,
+  getPeriodDescription,
+  getPeriodEmptyText,
+  getPeriodLimit,
+  getPeriodTitle,
+} from "./utils/format";
 import "./styles.css";
 
 echarts.use([GridComponent, LegendComponent, TooltipComponent, BarChart, LineChart, CanvasRenderer]);
@@ -859,15 +868,20 @@ function HistoryList({
   loading,
   selectedKey,
   onSelect,
-  systemStatus
+  systemStatus,
+  period = "week",
+  variant = "mini",
 }: {
   items: HistoryItem[];
   loading: boolean;
   selectedKey: string | null;
   onSelect: (key: string) => void;
   systemStatus: SystemStatus;
+  period?: Period;
+  variant?: "mini" | "full";
 }) {
-  const visibleItems = items.slice(0, 12);
+  const maxItems = variant === "mini" ? 12 : 100;
+  const visibleItems = items.slice(0, maxItems);
 
   return (
     <div className="dashboard-history-list">
@@ -890,12 +904,28 @@ function HistoryList({
       })}
       {!loading && items.length === 0 ? (
         <div className="compact-empty">
+          <span>{getPeriodEmptyText(period)}</span>
           <DiagnosticsCollapsible status={systemStatus} />
         </div>
       ) : null}
-      {loading ? <div className="compact-empty">正在加载历史统计</div> : null}
+      {loading ? <div className="compact-empty">正在加载{getPeriodTitle(period)}视图历史数据</div> : null}
     </div>
   );
+}
+
+/**
+ * 根据数据数量推断 ECharts 周期类型（用于 label 格式化）
+ */
+function inferPeriodFromLabels(labels: string[]): Period {
+  // Try to infer from the first valid label
+  for (const label of labels) {
+    if (!label) continue;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(label)) return "day";
+    if (/第\d+周/.test(label) || /[Ww]\d+/.test(label)) return "week";
+    if (/^\d{4}-\d{2}$/.test(label)) return "month";
+    if (/^\d{4}$/.test(label)) return "year";
+  }
+  return "day";
 }
 
 function HistoryChart({
@@ -904,7 +934,8 @@ function HistoryChart({
   selectedKey,
   systemStatus,
   variant = "mini",
-  limit = 12
+  limit = 12,
+  period,
 }: {
   items: HistoryItem[];
   theme: ThemeMode;
@@ -912,6 +943,7 @@ function HistoryChart({
   systemStatus?: SystemStatus;
   variant?: "mini" | "full";
   limit?: number;
+  period?: Period;
 }) {
   const chartRef = useRef<HTMLDivElement | null>(null);
 
@@ -923,12 +955,20 @@ function HistoryChart({
 
     const chart = echarts.init(element);
     const isDark = theme === "dark";
-    const chartItems = items.slice(0, limit).reverse();
+    // 按时间正序排列显示（items来自后端已倒序，需反转）
+    const chartItems = [...items].reverse().slice(-limit);
+    const labels = chartItems.map((item) => item.label);
+    const effectivePeriod = period ?? inferPeriodFromLabels(labels);
+    const dataLength = labels.length;
+
     const textColor = cssVar("--color-text", isDark ? "#dbeafe" : "#172033");
+    const mutedColor = cssVar("--color-text-muted", isDark ? "#8ea3bc" : "#66758a");
     const gridColor = cssVar("--color-chart-grid", isDark ? "rgba(148, 163, 184, 0.16)" : "rgba(100, 116, 139, 0.18)");
     const downloadColor = cssVar("--color-download", isDark ? "#38bdf8" : "#0284c7");
     const uploadColor = cssVar("--color-upload", isDark ? "#34d399" : "#10b981");
-    const mutedColor = cssVar("--color-text-muted", isDark ? "#8ea3bc" : "#66758a");
+
+    const shouldRotate = dataLength > 8;
+    const gridBottom = dataLength > 10 ? 48 : dataLength > 6 ? 36 : 28;
 
     chart.setOption({
       animation: false,
@@ -942,15 +982,16 @@ function HistoryChart({
         backgroundColor: isDark ? "#111827" : "#ffffff",
         borderColor: isDark ? "#334155" : "#cbd5e1",
         textStyle: {
-          color: textColor
+          color: textColor,
+          fontSize: 12,
         },
         formatter: (params: unknown) => {
           const param = Array.isArray(params) ? params[0] : params;
-          const dataIndex = typeof param === "object" && param && "dataIndex" in param ? Number((param as { dataIndex: number }).dataIndex) : 0;
+          const dataIndex = typeof param === "object" && param && "dataIndex" in param
+            ? Number((param as { dataIndex: number }).dataIndex)
+            : 0;
           const item = chartItems[dataIndex];
-          if (!item) {
-            return "";
-          }
+          if (!item) return "";
 
           return [
             `<strong>${item.label}</strong>`,
@@ -961,39 +1002,48 @@ function HistoryChart({
         }
       },
       grid: {
-        left: 76,
-        right: 16,
-        top: 10,
-        bottom: 26
+        left: variant === "mini" ? 56 : 64,
+        right: variant === "mini" ? 12 : 20,
+        top: variant === "mini" ? 8 : 16,
+        bottom: gridBottom,
+        containLabel: true,
       },
       xAxis: {
-        type: "value",
+        type: "category",
+        data: labels,
         axisLabel: {
-          color: textColor,
-          formatter: (value: number) => formatBytes(value)
+          color: mutedColor,
+          fontSize: 11,
+          interval: "auto",
+          hideOverlap: true,
+          rotate: shouldRotate ? 25 : 0,
+          formatter: (value: string) => formatHistoryAxisLabel(value, effectivePeriod),
         },
-        splitLine: {
-          lineStyle: {
-            color: gridColor
-          }
-        }
+        axisLine: {
+          lineStyle: { color: gridColor },
+        },
+        axisTick: {
+          alignWithLabel: true,
+        },
       },
       yAxis: {
-        type: "category",
-        data: chartItems.map((item) => item.label),
+        type: "value",
         axisLabel: {
-          color: textColor,
-          width: 66,
-          overflow: "truncate"
-        }
+          color: mutedColor,
+          fontSize: 11,
+          formatter: (value: number) => formatBytes(value),
+        },
+        splitLine: {
+          lineStyle: { color: gridColor },
+        },
       },
       series: [
         {
           name: "总流量",
           type: "bar",
-          barWidth: 11,
+          barMaxWidth: variant === "mini" ? 20 : 28,
           itemStyle: {
-            borderRadius: [0, 4, 4, 0]
+            borderRadius: [2, 2, 0, 0],
           },
           data: chartItems.map((item) => {
             const key = historyRecordKey(item);
@@ -1001,16 +1051,12 @@ function HistoryChart({
               value: item.total_bytes,
               itemStyle: {
                 color: key === selectedKey ? uploadColor : downloadColor,
-                opacity: selectedKey && key !== selectedKey ? 0.62 : 1
+                opacity: selectedKey && key !== selectedKey ? 0.5 : 0.85,
               },
-              label: {
-                show: false,
-                color: mutedColor
-              }
             };
-          })
-        }
-      ]
+          }),
+        },
+      ],
     });
 
     const unbindResize = bindChartResize(chart, element);
@@ -1019,7 +1065,7 @@ function HistoryChart({
       unbindResize();
       chart.dispose();
     };
-  }, [items, limit, selectedKey, theme]);
+  }, [items, limit, selectedKey, theme, period, variant]);
 
   return (
     <div className={`history-chart-wrap ${variant === "full" ? "full-history-chart-wrap" : ""}`}>
@@ -1037,6 +1083,7 @@ function HistoryChart({
 function HistoryPanel({ theme, onOpenHistory, systemStatus }: { theme: ThemeMode; onOpenHistory: () => void; systemStatus: SystemStatus }) {
   const [period, setPeriod] = useState<Period>("week");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const chartLimit = getPeriodLimit(period, "mini");
   const { data: items, loading, error } = useTrafficHistory(period, 30);
   const maxTotalBytes = items.reduce((max, item) => Math.max(max, item.total_bytes), 0);
   const totalBytes = items.reduce((sum, item) => sum + item.total_bytes, 0);
@@ -1085,20 +1132,34 @@ function HistoryPanel({ theme, onOpenHistory, systemStatus }: { theme: ThemeMode
           <div className="side-card-head">
             <div>
               <h3>历史统计图表</h3>
-              <p>最近 {Math.min(items.length, 12)} 条周期总流量趋势</p>
+              <p>{getPeriodDescription(period, "mini")}</p>
             </div>
           </div>
-          <HistoryChart items={items} theme={theme} selectedKey={selectedKey} systemStatus={systemStatus} />
+          <HistoryChart
+            items={items}
+            theme={theme}
+            selectedKey={selectedKey}
+            systemStatus={systemStatus}
+            period={period}
+            limit={chartLimit}
+          />
         </section>
 
         <section className="side-card history-list-card">
           <div className="side-card-head">
             <div>
               <h3>历史统计列表</h3>
-              <p>最近 12 条记录</p>
+              <p>{getPeriodDescription(period, "mini")}</p>
             </div>
           </div>
-          <HistoryList items={items} loading={loading} selectedKey={selectedKey} onSelect={setSelectedKey} systemStatus={systemStatus} />
+          <HistoryList
+            items={items}
+            loading={loading}
+            selectedKey={selectedKey}
+            onSelect={setSelectedKey}
+            systemStatus={systemStatus}
+            period={period}
+          />
         </section>
 
         <div className="side-panel-footer">
@@ -1118,7 +1179,9 @@ function HistoryPage({ theme, systemStatus }: { theme: ThemeMode; systemStatus: 
   const [view, setView] = useState<HistoryView>("list");
   const [period, setPeriod] = useState<Period>("week");
   const [scaleMode, setScaleMode] = useState<ScaleMode>("actual");
-  const { data: items, loading, error } = useTrafficHistory(period, 100, view === "list");
+  const chartLimit = getPeriodLimit(period, "full");
+  const listLimit = 100;
+  const { data: items, loading, error } = useTrafficHistory(period, listLimit, view === "list");
   const { data: calendarItems, loading: calendarLoading, error: calendarError } = useTrafficHistory("day", 365, view === "calendar");
 
   const maxTotalBytes = items.reduce((max, item) => Math.max(max, item.total_bytes), 0);
@@ -1178,10 +1241,18 @@ function HistoryPage({ theme, systemStatus }: { theme: ThemeMode; systemStatus: 
             <div className="full-history-chart-head">
               <div>
                 <h2>完整历史图表</h2>
-                <p>当前周期最近 {Math.min(items.length, 24)} 条总流量趋势</p>
+                <p>{getPeriodDescription(period, "full")} 总流量趋势</p>
               </div>
             </div>
-            <HistoryChart items={items} theme={theme} selectedKey={null} systemStatus={systemStatus} variant="full" limit={24} />
+            <HistoryChart
+              items={items}
+              theme={theme}
+              selectedKey={null}
+              systemStatus={systemStatus}
+              variant="full"
+              limit={chartLimit}
+              period={period}
+            />
           </section>
 
           <div className="history-table-wrap">
@@ -1224,7 +1295,7 @@ function HistoryPage({ theme, systemStatus }: { theme: ThemeMode; systemStatus: 
                 {!loading && items.length === 0 ? (
                   <tr>
                     <td className="empty-row" colSpan={5}>
-                      <span>暂无历史流量数据</span>
+                      <span>{getPeriodEmptyText(period)}</span>
                       <DiagnosticsTips status={systemStatus} compact />
                     </td>
                   </tr>
@@ -1232,7 +1303,7 @@ function HistoryPage({ theme, systemStatus }: { theme: ThemeMode; systemStatus: 
                 {loading ? (
                   <tr>
                     <td className="empty-row" colSpan={5}>
-                      正在加载历史流量数据
+                      正在加载{getPeriodTitle(period)}视图历史数据
                     </td>
                   </tr>
                 ) : null}
