@@ -41,6 +41,8 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
   const [failureCount, setFailureCount] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const inFlightPromiseRef = useRef<Promise<void> | null>(null);
+  const inFlightRequestIdRef = useRef<number | null>(null);
+  const latestRequestIdRef = useRef(0);
   const mountedRef = useRef(false);
   const fetcherRef = useRef(fetcher);
   const timerRef = useRef<number | null>(null);
@@ -63,10 +65,10 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
     }
   }, []);
 
-  const runFetch = useCallback(async () => {
+  const runFetch = useCallback(async (requestId: number) => {
     try {
       const nextData = await fetcherRef.current();
-      if (!mountedRef.current) {
+      if (!mountedRef.current || requestId !== latestRequestIdRef.current) {
         return;
       }
       setData(nextData);
@@ -74,7 +76,7 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
       setFailureCount(0);
       setLastUpdated(new Date());
     } catch {
-      if (!mountedRef.current) {
+      if (!mountedRef.current || requestId !== latestRequestIdRef.current) {
         return;
       }
       setFailureCount((current) => {
@@ -86,10 +88,13 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
         setData(initialData);
       }
     } finally {
-      if (mountedRef.current) {
+      if (mountedRef.current && requestId === latestRequestIdRef.current) {
         setLoading(false);
       }
-      inFlightPromiseRef.current = null;
+      if (inFlightRequestIdRef.current === requestId) {
+        inFlightPromiseRef.current = null;
+        inFlightRequestIdRef.current = null;
+      }
     }
   }, [failureThreshold, initialData, keepDataOnError]);
 
@@ -104,16 +109,13 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
         await activeRequest;
         return;
       }
-
-      await activeRequest.catch(() => undefined);
-      if (inFlightPromiseRef.current) {
-        await inFlightPromiseRef.current;
-        return;
-      }
     }
 
-    const request = runFetch();
+    const requestId = latestRequestIdRef.current + 1;
+    latestRequestIdRef.current = requestId;
+    const request = runFetch(requestId);
     inFlightPromiseRef.current = request;
+    inFlightRequestIdRef.current = requestId;
     await request;
   }, [enabled, runFetch]);
 
