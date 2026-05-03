@@ -198,6 +198,11 @@ docker compose ps
 
 所有容器状态应为 `Up`。
 
+**6. 更新项目**
+
+如果你已经通过 GitHub 仓库部署了 NAS NetStats，后续可以通过 `git pull` 拉取最新代码，并重新构建 Docker 容器完成更新。
+
+
 ---
 
 ## 更新项目

@@ -9,13 +9,17 @@ type PollingOptions<T> = {
   keepDataOnError?: boolean;
 };
 
+type RefetchOptions = {
+  force?: boolean;
+};
+
 export type PollingState<T> = {
   data: T;
   loading: boolean;
   error: string | null;
   failureCount: number;
   lastUpdated: Date | null;
-  refetch: () => Promise<void>;
+  refetch: (options?: RefetchOptions) => Promise<void>;
 };
 
 function getErrorText(failureCount: number, threshold: number): string {
@@ -36,7 +40,7 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
   const [error, setError] = useState<string | null>(null);
   const [failureCount, setFailureCount] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const inFlightRef = useRef(false);
+  const inFlightPromiseRef = useRef<Promise<void> | null>(null);
   const mountedRef = useRef(false);
   const fetcherRef = useRef(fetcher);
   const timerRef = useRef<number | null>(null);
@@ -59,12 +63,7 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
     }
   }, []);
 
-  const refetch = useCallback(async () => {
-    if (!enabled || inFlightRef.current) {
-      return;
-    }
-
-    inFlightRef.current = true;
+  const runFetch = useCallback(async () => {
     try {
       const nextData = await fetcherRef.current();
       if (!mountedRef.current) {
@@ -90,9 +89,33 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
       if (mountedRef.current) {
         setLoading(false);
       }
-      inFlightRef.current = false;
+      inFlightPromiseRef.current = null;
     }
-  }, [enabled, failureThreshold, fetcher, initialData, keepDataOnError]);
+  }, [failureThreshold, initialData, keepDataOnError]);
+
+  const refetch = useCallback(async (refetchOptions: RefetchOptions = {}) => {
+    if (!enabled) {
+      return;
+    }
+
+    if (inFlightPromiseRef.current) {
+      const activeRequest = inFlightPromiseRef.current;
+      if (!refetchOptions.force) {
+        await activeRequest;
+        return;
+      }
+
+      await activeRequest.catch(() => undefined);
+      if (inFlightPromiseRef.current) {
+        await inFlightPromiseRef.current;
+        return;
+      }
+    }
+
+    const request = runFetch();
+    inFlightPromiseRef.current = request;
+    await request;
+  }, [enabled, runFetch]);
 
   useEffect(() => {
     if (!enabled) {
@@ -130,7 +153,7 @@ export function usePollingQuery<T>(fetcher: () => Promise<T>, options: PollingOp
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       clearTimer();
     };
-  }, [clearTimer, enabled, fetcher, hiddenIntervalMs, intervalMs, refetch]);
+  }, [clearTimer, enabled, hiddenIntervalMs, intervalMs, refetch]);
 
   return {
     data,

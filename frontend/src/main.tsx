@@ -1129,7 +1129,7 @@ function HistoryPanel({
 
   useEffect(() => {
     if (refreshSignal > 0) {
-      void refetch();
+      void refetch({ force: true });
     }
   }, [refetch, refreshSignal]);
 
@@ -1246,7 +1246,7 @@ function HistoryPage({
 
   useEffect(() => {
     if (refreshSignal > 0) {
-      void Promise.all([refetchHistoryList(), refetchCalendar()]);
+      void Promise.all([refetchHistoryList({ force: true }), refetchCalendar({ force: true })]);
     }
   }, [refetchCalendar, refetchHistoryList, refreshSignal]);
 
@@ -1420,10 +1420,10 @@ function App() {
     setManualRefreshing(true);
     try {
       await Promise.all([
-        summaryQuery.refetch(),
-        systemStatusQuery.refetch(),
-        speedQuery.refetch(),
-        realtimeQuery.refetch()
+        summaryQuery.refetch({ force: true }),
+        systemStatusQuery.refetch({ force: true }),
+        speedQuery.refetch({ force: true }),
+        realtimeQuery.refetch({ force: true })
       ]);
       setManualRefreshSignal((current) => current + 1);
     } finally {
