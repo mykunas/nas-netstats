@@ -200,16 +200,11 @@ docker compose ps
 
 ---
 
-
 ## 更新项目
 
 如果你已经通过 GitHub 仓库部署了 NAS NetStats，后续可以通过 `git pull` 拉取最新代码，并重新构建 Docker 容器完成更新。
 
-当前项目仓库：
-
-```bash
-https://github.com/mykunas/nas-netstats
-
+当前项目仓库：https://github.com/mykunas/nas-netstats
 
 ## ⚙️ 配置说明
 
