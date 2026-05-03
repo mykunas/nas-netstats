@@ -906,6 +906,60 @@ select {
   white-space: nowrap;
 }
 
+.manual-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  height: 26px;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-card);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease;
+}
+
+.manual-refresh-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-download) 48%, var(--color-border));
+  background: color-mix(in srgb, var(--color-download) 8%, var(--color-card));
+  color: var(--color-download);
+}
+
+.manual-refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.manual-refresh-icon {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+}
+
+.manual-refresh-icon::after {
+  position: absolute;
+  right: -2px;
+  top: -3px;
+  width: 4px;
+  height: 4px;
+  border-top: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  content: "";
+  transform: rotate(18deg);
+}
+
 .theme-toggle-knob {
   position: relative;
   width: 22px;
@@ -1667,7 +1721,8 @@ select {
     width: 100%;
   }
 
-  .theme-toggle {
+  .theme-toggle,
+  .manual-refresh-button {
     justify-content: flex-start;
     width: 100%;
     padding: 0 12px;
@@ -1778,7 +1833,8 @@ html.dark .nav-tabs {
 
 html.dark .nav-tabs button,
 html.dark .status-badge,
-html.dark .theme-toggle {
+html.dark .theme-toggle,
+html.dark .manual-refresh-button {
   border-color: #334155;
   background: #111827;
   color: #cbd5e1;

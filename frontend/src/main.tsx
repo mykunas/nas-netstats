@@ -316,18 +316,38 @@ function ThemeToggle({ theme, onToggle }: { theme: ThemeMode; onToggle: () => vo
   );
 }
 
+function ManualRefreshButton({ onRefresh, refreshing }: { onRefresh: () => void; refreshing: boolean }) {
+  return (
+    <button
+      type="button"
+      className="manual-refresh-button"
+      onClick={onRefresh}
+      disabled={refreshing}
+      title="立即刷新全局数据"
+      aria-label="立即刷新全局数据"
+    >
+      <span className="manual-refresh-icon" aria-hidden="true" />
+      {refreshing ? "刷新中" : "刷新"}
+    </button>
+  );
+}
+
 function DashboardHeader({
   backendState,
   latestRecordTime,
   lastRefreshTime,
   theme,
-  onToggleTheme
+  onToggleTheme,
+  onRefreshAll,
+  refreshing
 }: {
   backendState: BackendState;
   latestRecordTime: string | null;
   lastRefreshTime: Date | null;
   theme: ThemeMode;
   onToggleTheme: () => void;
+  onRefreshAll: () => void;
+  refreshing: boolean;
 }) {
   return (
     <header className="dashboard-header">
@@ -347,6 +367,7 @@ function DashboardHeader({
         </span>
         <StatusBadge state={backendState} />
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+        <ManualRefreshButton onRefresh={onRefreshAll} refreshing={refreshing} />
       </div>
     </header>
   );
@@ -560,6 +581,9 @@ function DashboardPage({
   theme,
   backendState,
   onToggleTheme,
+  onRefreshAll,
+  refreshSignal,
+  refreshing,
   lastRefreshTime,
   onOpenHistory
 }: {
@@ -571,6 +595,9 @@ function DashboardPage({
   theme: ThemeMode;
   backendState: BackendState;
   onToggleTheme: () => void;
+  onRefreshAll: () => void;
+  refreshSignal: number;
+  refreshing: boolean;
   lastRefreshTime: Date | null;
   onOpenHistory: () => void;
 }) {
@@ -583,6 +610,8 @@ function DashboardPage({
           lastRefreshTime={lastRefreshTime}
           theme={theme}
           onToggleTheme={onToggleTheme}
+          onRefreshAll={onRefreshAll}
+          refreshing={refreshing}
         />
         <SystemStatusBar status={systemStatus} error={systemStatusError} />
 
@@ -621,7 +650,7 @@ function DashboardPage({
         <AlertSummary />
       </section>
 
-      <HistoryPanel theme={theme} onOpenHistory={onOpenHistory} systemStatus={systemStatus} />
+      <HistoryPanel theme={theme} onOpenHistory={onOpenHistory} systemStatus={systemStatus} refreshSignal={refreshSignal} />
     </div>
   );
 }
@@ -1080,13 +1109,29 @@ function HistoryChart({
   );
 }
 
-function HistoryPanel({ theme, onOpenHistory, systemStatus }: { theme: ThemeMode; onOpenHistory: () => void; systemStatus: SystemStatus }) {
+function HistoryPanel({
+  theme,
+  onOpenHistory,
+  systemStatus,
+  refreshSignal
+}: {
+  theme: ThemeMode;
+  onOpenHistory: () => void;
+  systemStatus: SystemStatus;
+  refreshSignal: number;
+}) {
   const [period, setPeriod] = useState<Period>("week");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const chartLimit = getPeriodLimit(period, "mini");
-  const { data: items, loading, error } = useTrafficHistory(period, 30);
+  const { data: items, loading, error, refetch } = useTrafficHistory(period, 30);
   const maxTotalBytes = items.reduce((max, item) => Math.max(max, item.total_bytes), 0);
   const totalBytes = items.reduce((sum, item) => sum + item.total_bytes, 0);
+
+  useEffect(() => {
+    if (refreshSignal > 0) {
+      void refetch();
+    }
+  }, [refetch, refreshSignal]);
 
   useEffect(() => {
     if (items.length === 0) {
@@ -1175,16 +1220,35 @@ function HistoryPanel({ theme, onOpenHistory, systemStatus }: { theme: ThemeMode
   );
 }
 
-function HistoryPage({ theme, systemStatus }: { theme: ThemeMode; systemStatus: SystemStatus }) {
+function HistoryPage({
+  theme,
+  systemStatus,
+  refreshSignal
+}: {
+  theme: ThemeMode;
+  systemStatus: SystemStatus;
+  refreshSignal: number;
+}) {
   const [view, setView] = useState<HistoryView>("list");
   const [period, setPeriod] = useState<Period>("week");
   const [scaleMode, setScaleMode] = useState<ScaleMode>("actual");
   const chartLimit = getPeriodLimit(period, "full");
   const listLimit = 100;
-  const { data: items, loading, error } = useTrafficHistory(period, listLimit, view === "list");
-  const { data: calendarItems, loading: calendarLoading, error: calendarError } = useTrafficHistory("day", 365, view === "calendar");
+  const { data: items, loading, error, refetch: refetchHistoryList } = useTrafficHistory(period, listLimit, view === "list");
+  const {
+    data: calendarItems,
+    loading: calendarLoading,
+    error: calendarError,
+    refetch: refetchCalendar
+  } = useTrafficHistory("day", 365, view === "calendar");
 
   const maxTotalBytes = items.reduce((max, item) => Math.max(max, item.total_bytes), 0);
+
+  useEffect(() => {
+    if (refreshSignal > 0) {
+      void Promise.all([refetchHistoryList(), refetchCalendar()]);
+    }
+  }, [refetchCalendar, refetchHistoryList, refreshSignal]);
 
   return (
     <section className="panel history-panel">
@@ -1319,6 +1383,8 @@ function HistoryPage({ theme, systemStatus }: { theme: ThemeMode; systemStatus: 
 function App() {
   const [route, setRoute] = useState<RoutePath>(currentRoute());
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
+  const [manualRefreshSignal, setManualRefreshSignal] = useState(0);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const summaryQuery = useDashboardSummary();
   const systemStatusQuery = useSystemStatus();
   const isDashboardRoute = route === "/";
@@ -1344,6 +1410,25 @@ function App() {
 
   function toggleTheme() {
     setTheme((current) => (current === "dark" ? "light" : "dark"));
+  }
+
+  async function refreshAllData() {
+    if (manualRefreshing) {
+      return;
+    }
+
+    setManualRefreshing(true);
+    try {
+      await Promise.all([
+        summaryQuery.refetch(),
+        systemStatusQuery.refetch(),
+        speedQuery.refetch(),
+        realtimeQuery.refetch()
+      ]);
+      setManualRefreshSignal((current) => current + 1);
+    } finally {
+      setManualRefreshing(false);
+    }
   }
 
   useEffect(() => {
@@ -1373,6 +1458,9 @@ function App() {
           theme={theme}
           backendState={backendState}
           onToggleTheme={toggleTheme}
+          onRefreshAll={() => void refreshAllData()}
+          refreshSignal={manualRefreshSignal}
+          refreshing={manualRefreshing}
           lastRefreshTime={lastRefreshTime}
           onOpenHistory={() => navigate("/history")}
         />
@@ -1385,12 +1473,13 @@ function App() {
             </div>
             <div className="topbar-actions">
               <ThemeToggle theme={theme} onToggle={toggleTheme} />
+              <ManualRefreshButton onRefresh={() => void refreshAllData()} refreshing={manualRefreshing} />
               <StatusBadge state={backendState} />
             </div>
           </header>
 
           <Nav route={route} onNavigate={navigate} />
-          <HistoryPage theme={theme} systemStatus={systemStatusQuery.data} />
+          <HistoryPage theme={theme} systemStatus={systemStatusQuery.data} refreshSignal={manualRefreshSignal} />
         </>
       )}
     </main>
