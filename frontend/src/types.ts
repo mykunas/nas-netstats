@@ -5,6 +5,7 @@ export type ScaleMode = "actual" | "log" | "percent";
 export type HistoryView = "list" | "calendar";
 export type ThemeMode = "light" | "dark";
 export type CollectorStatus = "online" | "stale" | "no_data";
+export type InterfaceType = "physical" | "bridge" | "docker" | "virtual_machine" | "loopback" | "tunnel" | "unknown";
 
 export type Summary = {
   today_download: number;
@@ -45,12 +46,36 @@ export type SystemStatus = {
   database_status: "connected" | "disconnected";
   collector_status: CollectorStatus;
   configured_interface: string;
+  selected_interface: string | null;
   latest_interface: string | null;
   latest_record_time: string | null;
   seconds_since_last_record: number | null;
   total_records: number;
   available_interfaces: string[];
+  recommended_interfaces: string[];
+  ignored_interfaces: string[];
   monitored_interfaces: string[];
   collect_interval: number;
   error?: string;
+};
+
+export type NetworkInterfaceInfo = {
+  name: string;
+  type: InterfaceType;
+  is_recommended: boolean;
+  is_selected: boolean;
+  rx_bytes: number;
+  tx_bytes: number;
+  reason: string;
+};
+
+export type SystemInterfacesResponse = {
+  configured_interface: string;
+  selected_interface: string | null;
+  interfaces: NetworkInterfaceInfo[];
+};
+
+export type InterfaceSelectResponse = {
+  selected_interface: string;
+  message: string;
 };

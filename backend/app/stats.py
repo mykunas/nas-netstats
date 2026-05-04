@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from .models import TrafficRecord
 
 DEFAULT_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Shanghai")
-NAS_INTERFACE = os.getenv("NAS_INTERFACE", "eth0")
 
 
 def app_timezone() -> tzinfo:
@@ -47,11 +46,16 @@ def local_to_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def first_and_last_records(session: Session, start: datetime, end: datetime) -> tuple[TrafficRecord | None, TrafficRecord | None]:
+def first_and_last_records(
+    session: Session,
+    start: datetime,
+    end: datetime,
+    interface_name: str,
+) -> tuple[TrafficRecord | None, TrafficRecord | None]:
     start_utc = local_to_utc(start)
     end_utc = local_to_utc(end)
     base_filter = (
-        TrafficRecord.interface_name == NAS_INTERFACE,
+        TrafficRecord.interface_name == interface_name,
         TrafficRecord.created_at >= start_utc,
         TrafficRecord.created_at < end_utc,
     )
@@ -79,18 +83,31 @@ def period_totals(first_record: TrafficRecord | None, last_record: TrafficRecord
     return {"download": download, "upload": upload, "total": download + upload}
 
 
-def dashboard_summary(session: Session) -> dict:
+def dashboard_summary(session: Session, interface_name: str | None) -> dict:
+    if not interface_name:
+        return {
+            "today_download": 0,
+            "today_upload": 0,
+            "today_total": 0,
+            "month_download": 0,
+            "month_upload": 0,
+            "month_total": 0,
+            "current_download_speed": 0,
+            "current_upload_speed": 0,
+            "latest_record_time": None,
+        }
+
     now = datetime.now(app_timezone())
     today_start = start_of_day(now)
     today_end = today_start + timedelta(days=1)
     month_start = start_of_month(now)
     month_end = add_months(month_start, 1)
 
-    today = period_totals(*first_and_last_records(session, today_start, today_end))
-    month = period_totals(*first_and_last_records(session, month_start, month_end))
+    today = period_totals(*first_and_last_records(session, today_start, today_end, interface_name))
+    month = period_totals(*first_and_last_records(session, month_start, month_end, interface_name))
     latest_record = session.scalar(
         select(TrafficRecord)
-        .where(TrafficRecord.interface_name == NAS_INTERFACE)
+        .where(TrafficRecord.interface_name == interface_name)
         .order_by(desc(TrafficRecord.created_at), desc(TrafficRecord.id))
         .limit(1)
     )
@@ -108,11 +125,14 @@ def dashboard_summary(session: Session) -> dict:
     }
 
 
-def realtime_records(session: Session, limit: int) -> list[dict]:
+def realtime_records(session: Session, limit: int, interface_name: str | None) -> list[dict]:
+    if not interface_name:
+        return []
+
     safe_limit = min(max(limit, 1), 2000)
     records = session.scalars(
         select(TrafficRecord)
-        .where(TrafficRecord.interface_name == NAS_INTERFACE)
+        .where(TrafficRecord.interface_name == interface_name)
         .order_by(desc(TrafficRecord.created_at), desc(TrafficRecord.id))
         .limit(safe_limit)
     ).all()
@@ -178,14 +198,17 @@ def period_label(start: datetime, period: str) -> str:
     raise ValueError(f"Unsupported period: {period}")
 
 
-def traffic_history(session: Session, period: str, limit: int = 100) -> list[dict]:
+def traffic_history(session: Session, period: str, limit: int = 100, interface_name: str | None = None) -> list[dict]:
+    if not interface_name:
+        return []
+
     safe_limit = min(max(limit, 1), 1000)
     now = datetime.now(app_timezone())
     start = history_start(period, now, safe_limit)
     records = session.scalars(
         select(TrafficRecord)
         .where(
-            TrafficRecord.interface_name == NAS_INTERFACE,
+            TrafficRecord.interface_name == interface_name,
             TrafficRecord.created_at >= local_to_utc(start),
         )
         .order_by(asc(TrafficRecord.created_at), asc(TrafficRecord.id))

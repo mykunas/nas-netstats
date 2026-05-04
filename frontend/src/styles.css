@@ -334,6 +334,183 @@ select {
   color: var(--color-text-strong);
 }
 
+.interface-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.interface-modal {
+  width: min(1120px, 100%);
+  max-height: min(760px, calc(100vh - 36px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-card);
+  background: var(--color-card-solid);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+}
+
+.interface-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.interface-modal-head h2 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: 18px;
+}
+
+.interface-modal-head p {
+  margin: 5px 0 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.modal-close {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-card-muted);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.interface-modal-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.interface-modal-summary span {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-card-muted);
+}
+
+.interface-loading {
+  padding: 12px 18px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.interface-table-wrap {
+  overflow: auto;
+}
+
+.interface-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.interface-table th,
+.interface-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.interface-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-card-muted);
+  color: var(--color-text-strong);
+  font-weight: 700;
+}
+
+.interface-table tr.selected {
+  outline: 2px solid color-mix(in srgb, var(--color-download) 54%, transparent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--color-download) 8%, var(--color-card-solid));
+}
+
+.interface-table tr.risk {
+  background: color-mix(in srgb, var(--color-warning) 7%, var(--color-card-solid));
+}
+
+.iface-name {
+  color: var(--color-text-strong);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.iface-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  margin: 0 4px 4px 0;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.iface-tag.recommended {
+  background: color-mix(in srgb, var(--color-success) 15%, transparent);
+  color: var(--color-success);
+}
+
+.iface-tag.muted {
+  background: color-mix(in srgb, var(--color-border-strong) 18%, transparent);
+  color: var(--color-text-muted);
+}
+
+.iface-tag.selected-tag {
+  background: color-mix(in srgb, var(--color-download) 16%, transparent);
+  color: var(--color-download);
+}
+
+.iface-tag.warning {
+  background: color-mix(in srgb, var(--color-warning) 20%, transparent);
+  color: color-mix(in srgb, var(--color-warning) 78%, #7c2d12);
+}
+
+.iface-reason {
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.select-interface-button {
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--color-download) 46%, var(--color-border));
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--color-download) 10%, var(--color-card));
+  color: var(--color-download);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.select-interface-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 /* ===== 折叠排查建议 ===== */
 .system-tips-collapse {
   position: relative;
@@ -1825,6 +2002,19 @@ select {
   .history-table th,
   .history-table td {
     padding: 6px 5px;
+  }
+
+  .interface-modal-backdrop {
+    align-items: stretch;
+    padding: 10px;
+  }
+
+  .interface-modal {
+    max-height: calc(100vh - 20px);
+  }
+
+  .interface-modal-head {
+    flex-direction: column;
   }
 
   .bar-cell {

@@ -175,14 +175,14 @@ cp .env.example .env
 编辑 `.env` 文件，按需调整参数：
 
 ```env
-# 监控所有网卡（默认），或指定单个网卡如 eth0
-NAS_INTERFACE=all
+# 自动推荐一个主网卡，或指定初始网卡如 eth0
+NAS_INTERFACE=auto
 
 # 采集间隔（秒），默认 5 秒
 COLLECT_INTERVAL=5
 ```
 
-> 💡 **提示**：默认 `NAS_INTERFACE=all` 会汇总所有可采集网卡。如需指定单个网卡（如 `eth0`、`bond0`、`br0`），修改后重启即可。
+> 💡 **提示**：`NAS_INTERFACE` 只作为首次启动时的初始默认网卡。启动后可以在网页端切换监控网卡，切换后不需要重启容器。
 
 **4. 启动服务**
 
@@ -217,7 +217,7 @@ docker compose ps
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
-| `NAS_INTERFACE` | `all` | 监控网卡名称，`all` 表示汇总所有网卡 |
+| `NAS_INTERFACE` | `auto` | 初始监控网卡。`auto` 会优先推荐疑似物理网卡，也可以填写 `eth0`、`enp3s0`、`bond0` 等具体网卡 |
 | `COLLECT_INTERVAL` | `5` | 数据采集间隔（秒） |
 | `POSTGRES_DB` | `nas_netstats` | PostgreSQL 数据库名 |
 | `POSTGRES_USER` | `nas_netstats` | PostgreSQL 用户名 |
@@ -244,6 +244,20 @@ cat /proc/net/dev
 | `br0` | Docker 网桥 / Open vSwitch 网桥 |
 
 > 如果不确定，可以查看 `cat /proc/net/dev` 中收发字节数明显的网卡。
+
+### 如何选择监控网卡
+
+NAS、虚拟机、旁路由和 Docker 同时运行时，系统里经常会出现 `eth0`、`br0`、`docker0`、`vnet0`、`tap0`、`virbr0`、`lo` 等多个网卡。如果把所有网卡流量加总，同一份数据可能同时经过物理网卡、桥接网卡或虚拟机网卡，导致统计结果重复放大。
+
+建议在网页端选择一个 NAS 主网卡进行统计：
+
+1. 打开首页顶部的“切换网卡”。
+2. 优先选择绿色“推荐”的物理网卡，例如 `eth0`、`enp3s0`、`ens18`、`eno1`、`bond0`。
+3. 不建议选择 `docker0`、`vnet0`、`tap0`、`virbr0`、`lo`，这些网卡通常不是 NAS 总流量入口，可能造成重复统计或无意义数据。
+4. 如果你的 NAS 使用桥接网络，例如 `br0` 或 `vmbr0`，需要结合实际网络结构确认是否会和物理网卡重复统计。
+5. 网页端切换后会保存到数据库，collector 会在约 10 秒内自动切换到新网卡，不需要重启容器。
+
+历史统计、实时曲线和首页汇总默认只统计当前选中的网卡。切换网卡后，新采集记录会使用新的 `interface_name`，避免把旧网卡和新网卡的数据混在一起。
 
 ---
 
@@ -325,7 +339,7 @@ docker compose logs -f collector
 
 ### 🔧 网卡名称填错了怎么办？
 
-只需修改 `.env` 文件，将 `NAS_INTERFACE` 改为正确的网卡名称或 `all`，然后重启：
+可以直接在网页端点击“切换网卡”重新选择，不需要重启。也可以修改 `.env` 中的 `NAS_INTERFACE` 作为首次启动默认值，然后重启：
 
 ```bash
 docker compose up -d

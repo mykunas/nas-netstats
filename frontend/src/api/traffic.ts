@@ -1,5 +1,5 @@
-import { fetchJson } from "./client";
-import type { HistoryItem, Period, RealtimePoint, Summary, SystemStatus } from "../types";
+import { fetchJson, postJson } from "./client";
+import type { HistoryItem, InterfaceSelectResponse, Period, RealtimePoint, Summary, SystemInterfacesResponse, SystemStatus } from "../types";
 
 export function getDashboardSummary(): Promise<Summary> {
   return fetchJson<Summary>("/api/dashboard/summary");
@@ -19,4 +19,12 @@ export function getTrafficHistory(period: Period, limit?: number): Promise<Histo
 
 export function getSystemStatus(): Promise<SystemStatus> {
   return fetchJson<SystemStatus>("/api/system/status");
+}
+
+export function getSystemInterfaces(): Promise<SystemInterfacesResponse> {
+  return fetchJson<SystemInterfacesResponse>("/api/system/interfaces");
+}
+
+export function selectSystemInterface(interfaceName: string): Promise<InterfaceSelectResponse> {
+  return postJson<InterfaceSelectResponse>("/api/system/interfaces/select", { interface_name: interfaceName });
 }

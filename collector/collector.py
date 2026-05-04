@@ -10,19 +10,10 @@ from pathlib import Path
 BACKEND_API = os.getenv("BACKEND_API", "http://127.0.0.1:8000").rstrip("/")
 HOST_PROC_NET_DEV = Path("/host/proc/net/dev")
 PROC_NET_DEV = Path("/proc/net/dev")
-NAS_INTERFACE = (os.getenv("NAS_INTERFACE", "all").strip() or "all")
-ALL_INTERFACES_VALUES = {"all", "*", "全部", "所有"}
-EXCLUDED_INTERFACE_PREFIXES = (
-    "lo",
-    "docker",
-    "veth",
-    "br-",
-    "virbr",
-    "cni",
-    "flannel",
-    "kube",
-    "podman",
-)
+CONFIGURED_INTERFACE = (os.getenv("NAS_INTERFACE", "auto").strip() or "auto")
+ALL_INTERFACES_VALUES = {"all", "*", "auto", "自动", "全部", "所有"}
+CONFIG_REFRESH_INTERVAL = 10
+HEARTBEAT_INTERVAL = 10
 
 
 def read_collect_interval() -> int:
@@ -35,7 +26,6 @@ def read_collect_interval() -> int:
 
 
 COLLECT_INTERVAL = read_collect_interval()
-HEARTBEAT_INTERVAL = 10
 
 
 @dataclass
@@ -46,6 +36,7 @@ class InterfaceCounters:
 
 @dataclass
 class LastSample:
+    interface_name: str
     rx_bytes: int
     tx_bytes: int
     sampled_at: float
@@ -83,60 +74,49 @@ def read_proc_net_dev() -> tuple[Path, dict[str, InterfaceCounters]]:
     return path, interfaces
 
 
-def read_interface_counters(interface_name: str) -> InterfaceCounters | None:
-    path, interfaces = read_proc_net_dev()
-    counters = interfaces.get(interface_name)
-    if counters is not None:
-        return counters
+def is_all_interfaces_mode(interface_name: str | None) -> bool:
+    return (interface_name or "").strip().lower() in ALL_INTERFACES_VALUES
 
-    print(f"interface {interface_name!r} not found in {path}", flush=True)
+
+def interface_type(interface_name: str) -> str:
+    lower = interface_name.lower()
+    if lower == "lo":
+        return "loopback"
+    if lower.startswith("docker") or lower.startswith("br-"):
+        return "docker"
+    if lower.startswith(("vnet", "tap", "virbr")):
+        return "virtual_machine"
+    if lower.startswith(("br", "vmbr")):
+        return "bridge"
+    if lower.startswith(("tun", "wg", "tailscale", "zerotier", "ppp")):
+        return "tunnel"
+    if lower.startswith(("eth", "enp", "ens", "eno", "wlan", "bond")):
+        return "physical"
+    return "unknown"
+
+
+def is_recommended_interface(interface_name: str) -> bool:
+    return interface_type(interface_name) == "physical"
+
+
+def choose_local_default_interface(interfaces: dict[str, InterfaceCounters]) -> str | None:
+    names = sorted(interfaces.keys())
+    if not is_all_interfaces_mode(CONFIGURED_INTERFACE):
+        return CONFIGURED_INTERFACE
+
+    for name in names:
+        if is_recommended_interface(name):
+            return name
+
+    for name in names:
+        if interface_type(name) != "loopback":
+            return name
+
     return None
 
 
-def is_all_interfaces_mode(interface_name: str) -> bool:
-    return interface_name.strip().lower() in ALL_INTERFACES_VALUES
-
-
-def is_collectable_interface(interface_name: str) -> bool:
-    normalized = interface_name.strip()
-    if not normalized:
-        return False
-    return not any(normalized.startswith(prefix) for prefix in EXCLUDED_INTERFACE_PREFIXES)
-
-
-def collectable_interface_names(interfaces: dict[str, InterfaceCounters]) -> list[str]:
-    return sorted(name for name in interfaces if is_collectable_interface(name))
-
-
-def aggregate_counters(interfaces: dict[str, InterfaceCounters], interface_names: list[str]) -> InterfaceCounters | None:
-    if not interface_names:
-        return None
-
-    return InterfaceCounters(
-        rx_bytes=sum(interfaces[name].rx_bytes for name in interface_names),
-        tx_bytes=sum(interfaces[name].tx_bytes for name in interface_names),
-    )
-
-
-def read_monitored_counters() -> tuple[InterfaceCounters | None, list[str]]:
-    path, interfaces = read_proc_net_dev()
-    if is_all_interfaces_mode(NAS_INTERFACE):
-        monitored_interfaces = collectable_interface_names(interfaces)
-        counters = aggregate_counters(interfaces, monitored_interfaces)
-        if counters is None:
-            print(f"no collectable NAS interfaces found in {path}", flush=True)
-        return counters, monitored_interfaces
-
-    counters = interfaces.get(NAS_INTERFACE)
-    if counters is None:
-        print(f"interface {NAS_INTERFACE!r} not found in {path}", flush=True)
-        return None, []
-
-    return counters, [NAS_INTERFACE]
-
-
-def calculate_speeds(current: InterfaceCounters, last_sample: LastSample | None, now: float) -> tuple[float, float]:
-    if last_sample is None:
+def calculate_speeds(current: InterfaceCounters, last_sample: LastSample | None, interface_name: str, now: float) -> tuple[float, float]:
+    if last_sample is None or last_sample.interface_name != interface_name:
         return 0.0, 0.0
 
     elapsed = max(now - last_sample.sampled_at, 1.0)
@@ -144,7 +124,7 @@ def calculate_speeds(current: InterfaceCounters, last_sample: LastSample | None,
     tx_delta = current.tx_bytes - last_sample.tx_bytes
 
     if rx_delta < 0 or tx_delta < 0:
-        print("interface counters may have reset, speed calculation restarted", flush=True)
+        print(f"interface {interface_name} counters may have reset, speed calculation restarted", flush=True)
         return 0.0, 0.0
 
     return rx_delta / elapsed, tx_delta / elapsed
@@ -170,24 +150,55 @@ def post_json(path: str, payload: dict, label: str) -> None:
         print(f"{label} backend request error: {exc}", flush=True)
 
 
+def get_json(path: str, label: str) -> dict | None:
+    request = urllib.request.Request(f"{BACKEND_API}{path}", method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            if response.status >= 300:
+                print(f"{label} backend returned status {response.status}", flush=True)
+                return None
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        print(f"{label} backend request failed: HTTP {exc.code} {exc.reason}", flush=True)
+    except urllib.error.URLError as exc:
+        print(f"{label} backend connection failed: {exc.reason}", flush=True)
+    except Exception as exc:
+        print(f"{label} backend request error: {exc}", flush=True)
+    return None
+
+
 def post_traffic(payload: dict) -> None:
     post_json("/api/collector/traffic", payload, "traffic")
 
 
-def post_heartbeat() -> None:
+def read_selected_interface_from_backend() -> str | None:
+    payload = get_json("/api/collector/config", "config")
+    if not payload:
+        return None
+
+    selected = payload.get("selected_interface")
+    if isinstance(selected, str) and selected.strip():
+        return selected.strip()
+    return None
+
+
+def post_heartbeat(selected_interface: str | None) -> None:
     path, interfaces = read_proc_net_dev()
-    monitored_interfaces = collectable_interface_names(interfaces) if is_all_interfaces_mode(NAS_INTERFACE) else ([NAS_INTERFACE] if NAS_INTERFACE in interfaces else [])
     payload = {
-        "configured_interface": NAS_INTERFACE,
+        "configured_interface": CONFIGURED_INTERFACE,
         "available_interfaces": sorted(interfaces.keys()),
-        "monitored_interfaces": monitored_interfaces,
+        "monitored_interfaces": [selected_interface] if selected_interface in interfaces else [],
+        "interface_counters": [
+            {"name": name, "rx_bytes": counters.rx_bytes, "tx_bytes": counters.tx_bytes}
+            for name, counters in sorted(interfaces.items())
+        ],
         "collect_interval": COLLECT_INTERVAL,
         "proc_path": str(path),
     }
     print(
         "heartbeat "
-        f"interface={NAS_INTERFACE} "
-        f"monitored_interfaces={','.join(monitored_interfaces) or '-'} "
+        f"configured_interface={CONFIGURED_INTERFACE} "
+        f"selected_interface={selected_interface or '-'} "
         f"available_interfaces={','.join(payload['available_interfaces']) or '-'} "
         f"proc_path={path}",
         flush=True,
@@ -195,21 +206,47 @@ def post_heartbeat() -> None:
     post_json("/api/collector/heartbeat", payload, "heartbeat")
 
 
+def resolve_selected_interface(last_selected_interface: str | None, backend_available: bool) -> tuple[str | None, bool]:
+    selected = read_selected_interface_from_backend()
+    if selected:
+        return selected, True
+
+    _, interfaces = read_proc_net_dev()
+    fallback = choose_local_default_interface(interfaces)
+    if fallback != last_selected_interface or backend_available:
+        print(
+            "collector config fallback "
+            f"configured_interface={CONFIGURED_INTERFACE} "
+            f"fallback_interface={fallback or '-'}",
+            flush=True,
+        )
+    return fallback, False
+
+
 def run() -> None:
     print(
-        f"NAS NetStats collector started interface={NAS_INTERFACE} interval={COLLECT_INTERVAL}s backend={BACKEND_API}",
+        f"NAS NetStats collector started configured_interface={CONFIGURED_INTERFACE} interval={COLLECT_INTERVAL}s backend={BACKEND_API}",
         flush=True,
     )
     last_sample: LastSample | None = None
+    selected_interface: str | None = None
+    backend_config_available = False
     next_collect_at = 0.0
+    next_config_at = 0.0
     next_heartbeat_at = 0.0
 
     while True:
         now = time.monotonic()
 
+        if now >= next_config_at:
+            selected_interface, backend_config_available = resolve_selected_interface(selected_interface, backend_config_available)
+            if selected_interface != (last_sample.interface_name if last_sample else None):
+                last_sample = None
+            next_config_at = now + CONFIG_REFRESH_INTERVAL
+
         if now >= next_heartbeat_at:
             try:
-                post_heartbeat()
+                post_heartbeat(selected_interface)
             except Exception as exc:
                 print(f"collector heartbeat error: {exc}", flush=True)
             next_heartbeat_at = now + HEARTBEAT_INTERVAL
@@ -217,37 +254,44 @@ def run() -> None:
         if now >= next_collect_at:
             try:
                 now = time.monotonic()
-                current, monitored_interfaces = read_monitored_counters()
-                if current is not None:
-                    download_speed, upload_speed = calculate_speeds(current, last_sample, now)
-                    payload = {
-                        "interface_name": "all" if is_all_interfaces_mode(NAS_INTERFACE) else NAS_INTERFACE,
-                        "rx_bytes": current.rx_bytes,
-                        "tx_bytes": current.tx_bytes,
-                        "download_speed": download_speed,
-                        "upload_speed": upload_speed,
-                    }
-                    print(
-                        "traffic "
-                        f"interface={payload['interface_name']} "
-                        f"monitored_interfaces={','.join(monitored_interfaces) or '-'} "
-                        f"rx_bytes={current.rx_bytes} "
-                        f"tx_bytes={current.tx_bytes} "
-                        f"download_speed={download_speed:.2f} bytes/s "
-                        f"upload_speed={upload_speed:.2f} bytes/s",
-                        flush=True,
-                    )
-                    post_traffic(payload)
-                    last_sample = LastSample(
-                        rx_bytes=current.rx_bytes,
-                        tx_bytes=current.tx_bytes,
-                        sampled_at=now,
-                    )
+                _, interfaces = read_proc_net_dev()
+                if not selected_interface:
+                    print("no selected interface available, skip this sample", flush=True)
+                else:
+                    current = interfaces.get(selected_interface)
+                    if current is None:
+                        print(f"selected interface {selected_interface!r} not found, skip this sample", flush=True)
+                        last_sample = None
+                    else:
+                        download_speed, upload_speed = calculate_speeds(current, last_sample, selected_interface, now)
+                        payload = {
+                            "interface_name": selected_interface,
+                            "rx_bytes": current.rx_bytes,
+                            "tx_bytes": current.tx_bytes,
+                            "download_speed": download_speed,
+                            "upload_speed": upload_speed,
+                        }
+                        print(
+                            "traffic "
+                            f"interface={selected_interface} "
+                            f"rx_bytes={current.rx_bytes} "
+                            f"tx_bytes={current.tx_bytes} "
+                            f"download_speed={download_speed:.2f} bytes/s "
+                            f"upload_speed={upload_speed:.2f} bytes/s",
+                            flush=True,
+                        )
+                        post_traffic(payload)
+                        last_sample = LastSample(
+                            interface_name=selected_interface,
+                            rx_bytes=current.rx_bytes,
+                            tx_bytes=current.tx_bytes,
+                            sampled_at=now,
+                        )
             except Exception as exc:
                 print(f"collector loop error: {exc}", flush=True)
             next_collect_at = now + COLLECT_INTERVAL
 
-        sleep_until = min(next_collect_at, next_heartbeat_at)
+        sleep_until = min(next_collect_at, next_config_at, next_heartbeat_at)
         time.sleep(max(0.5, min(1.0, sleep_until - time.monotonic())))
 
 

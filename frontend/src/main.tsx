@@ -5,7 +5,8 @@ import { GridComponent, LegendComponent, TooltipComponent } from "echarts/compon
 import { BarChart, LineChart } from "echarts/charts";
 import { CanvasRenderer } from "echarts/renderers";
 import { useCurrentSpeed, useDashboardSummary, useRealtimeTraffic, useSystemStatus, useTrafficHistory } from "./hooks/useTrafficData";
-import type { BackendState, CalendarDay, HistoryItem, HistoryView, Period, RealtimePoint, RoutePath, ScaleMode, Summary, SystemStatus, ThemeMode } from "./types";
+import { getSystemInterfaces, selectSystemInterface } from "./api/traffic";
+import type { BackendState, CalendarDay, HistoryItem, HistoryView, NetworkInterfaceInfo, Period, RealtimePoint, RoutePath, ScaleMode, Summary, SystemInterfacesResponse, SystemStatus, ThemeMode } from "./types";
 import {
   formatBytes,
   formatDateTime,
@@ -138,18 +139,40 @@ function collectorStatusTone(status: SystemStatus["collector_status"]): "online"
 
 function isAllInterfacesMode(interfaceName: string): boolean {
   const value = interfaceName.trim().toLowerCase();
-  return value === "all" || value === "*" || value === "全部" || value === "所有";
+  return value === "all" || value === "*" || value === "auto" || value === "自动" || value === "全部" || value === "所有";
 }
 
 function displayInterfaceName(interfaceName: string): string {
-  return isAllInterfacesMode(interfaceName) ? "所有 NAS 网卡" : interfaceName || "-";
+  return isAllInterfacesMode(interfaceName) ? "自动推荐主网卡" : interfaceName || "-";
+}
+
+function currentMonitoredInterface(status: SystemStatus): string {
+  return status.selected_interface || status.latest_interface || status.configured_interface;
+}
+
+function interfaceTypeLabel(type: NetworkInterfaceInfo["type"]): string {
+  const labels: Record<NetworkInterfaceInfo["type"], string> = {
+    physical: "物理网卡",
+    bridge: "桥接网卡",
+    docker: "Docker",
+    virtual_machine: "虚拟机",
+    loopback: "回环",
+    tunnel: "隧道网络",
+    unknown: "未知"
+  };
+  return labels[type] ?? type;
+}
+
+function interfaceHasDuplicateRisk(item: NetworkInterfaceInfo): boolean {
+  return ["bridge", "docker", "virtual_machine", "tunnel"].includes(item.type);
 }
 
 function interfaceMismatch(status: SystemStatus): boolean {
-  if (isAllInterfacesMode(status.configured_interface)) {
+  const interfaceName = status.selected_interface || status.configured_interface;
+  if (!interfaceName || isAllInterfacesMode(interfaceName)) {
     return false;
   }
-  return status.available_interfaces.length > 0 && !status.available_interfaces.includes(status.configured_interface);
+  return status.available_interfaces.length > 0 && !status.available_interfaces.includes(interfaceName);
 }
 
 function DiagnosticsTips({ status, compact = false }: { status: SystemStatus; compact?: boolean }) {
@@ -166,13 +189,14 @@ function DiagnosticsTips({ status, compact = false }: { status: SystemStatus; co
         <li>检查当前可用网卡是否包含配置的网卡。</li>
       </ul>
       <div className="diagnostics-interfaces">
-        <span>当前监控网卡：{displayInterfaceName(status.configured_interface)}</span>
+        <span>当前监控网卡：{displayInterfaceName(currentMonitoredInterface(status))}</span>
+        <span>推荐网卡：{status.recommended_interfaces.length > 0 ? status.recommended_interfaces.join(" / ") : "-"}</span>
         <span>实际监控：{status.monitored_interfaces.length > 0 ? status.monitored_interfaces.join(" / ") : "暂无心跳上报"}</span>
         <span>可用网卡：{status.available_interfaces.length > 0 ? status.available_interfaces.join(" / ") : "暂无心跳上报"}</span>
       </div>
       {mismatch ? (
         <div className="interface-warning">
-          当前配置网卡 {status.configured_interface} 未在系统网卡列表中发现，请检查 NAS_INTERFACE。
+          当前监控网卡 {currentMonitoredInterface(status)} 未在系统网卡列表中发现，请重新选择网卡。
         </div>
       ) : null}
     </div>
@@ -201,13 +225,161 @@ function DiagnosticsCollapsible({ status }: { status: SystemStatus }) {
   );
 }
 
-function SystemStatusBar({ status, error }: { status: SystemStatus; error: string | null }) {
+function InterfaceSelectorModal({
+  open,
+  onClose,
+  onSelected
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSelected: () => void;
+}) {
+  const [data, setData] = useState<SystemInterfacesResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let mounted = true;
+    setLoading(true);
+    setError(null);
+    void getSystemInterfaces()
+      .then((result) => {
+        if (mounted) {
+          setData(result);
+        }
+      })
+      .catch((exc) => {
+        if (mounted) {
+          setError(exc instanceof Error ? exc.message : "网卡列表加载失败");
+        }
+      })
+      .finally(() => {
+        if (mounted) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [open]);
+
+  async function chooseInterface(item: NetworkInterfaceInfo) {
+    if (!item.is_recommended) {
+      const confirmed = window.confirm("该网卡可能导致流量重复统计，确定要切换吗？");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setSaving(item.name);
+    setError(null);
+    try {
+      await selectSystemInterface(item.name);
+      const refreshed = await getSystemInterfaces();
+      setData(refreshed);
+      onSelected();
+      onClose();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "网卡切换失败");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="interface-modal-backdrop" role="presentation" onClick={onClose}>
+      <section className="interface-modal" role="dialog" aria-modal="true" aria-label="切换监控网卡" onClick={(event) => event.stopPropagation()}>
+        <div className="interface-modal-head">
+          <div>
+            <h2>切换监控网卡</h2>
+            <p>请选择一个 NAS 主网卡，避免桥接、Docker 或虚拟机网卡重复统计同一份流量。</p>
+          </div>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="关闭">
+            ×
+          </button>
+        </div>
+
+        <div className="interface-modal-summary">
+          <span>环境默认：{displayInterfaceName(data?.configured_interface ?? "-")}</span>
+          <span>当前监控：{displayInterfaceName(data?.selected_interface ?? "-")}</span>
+          <span>可用网卡：{data?.interfaces.length ?? 0}</span>
+        </div>
+
+        {error ? <div className="error-banner compact-error">{error}</div> : null}
+        {loading ? <div className="interface-loading">正在加载网卡列表</div> : null}
+
+        <div className="interface-table-wrap">
+          <table className="interface-table">
+            <thead>
+              <tr>
+                <th>网卡名称</th>
+                <th>类型</th>
+                <th>接收</th>
+                <th>发送</th>
+                <th>状态</th>
+                <th>说明</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data?.interfaces ?? []).map((item) => (
+                <tr key={item.name} className={item.is_selected ? "selected" : interfaceHasDuplicateRisk(item) ? "risk" : ""}>
+                  <td className="iface-name">{item.name}</td>
+                  <td>{interfaceTypeLabel(item.type)}</td>
+                  <td>{formatBytes(item.rx_bytes)}</td>
+                  <td>{formatBytes(item.tx_bytes)}</td>
+                  <td>
+                    <span className={`iface-tag ${item.is_recommended ? "recommended" : "muted"}`}>
+                      {item.is_recommended ? "推荐" : "不推荐"}
+                    </span>
+                    {item.is_selected ? <span className="iface-tag selected-tag">当前</span> : null}
+                    {interfaceHasDuplicateRisk(item) ? <span className="iface-tag warning">可能重复</span> : null}
+                  </td>
+                  <td className="iface-reason">{item.reason}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="select-interface-button"
+                      disabled={item.is_selected || saving !== null}
+                      onClick={() => void chooseInterface(item)}
+                    >
+                      {item.is_selected ? "已选择" : saving === item.name ? "切换中" : "选择此网卡"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {!loading && (data?.interfaces.length ?? 0) === 0 ? (
+                <tr>
+                  <td colSpan={7} className="empty-row">暂无可用网卡，请检查 collector 是否正常上报。</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SystemStatusBar({ status, error, onInterfaceChanged }: { status: SystemStatus; error: string | null; onInterfaceChanged: () => void }) {
   const [tipsOpen, setTipsOpen] = useState(false);
+  const [selectorOpen, setSelectorOpen] = useState(false);
   const mismatch = interfaceMismatch(status);
   const dbTone = status.database_status === "connected" ? "success" : "danger";
   const collectorTone = collectorStatusTone(status.collector_status);
   const backendTone = error ? "danger" : "success";
   const ifaceTone = mismatch ? "danger" : "";
+  const monitoredInterface = currentMonitoredInterface(status);
 
   return (
     <div className="system-status-bar">
@@ -234,8 +406,20 @@ function SystemStatusBar({ status, error }: { status: SystemStatus; error: strin
       </span>
       <span className="status-chip-divider">|</span>
       <span className="status-chip">
-        <span className="status-chip-label">网卡</span>
-        <span className={`status-chip-value ${ifaceTone}`}>{displayInterfaceName(status.configured_interface)}</span>
+        <span className="status-chip-label">当前监控网卡</span>
+        <span className={`status-chip-value ${ifaceTone}`}>{displayInterfaceName(monitoredInterface)}</span>
+      </span>
+      <span className="status-chip-divider">|</span>
+      <span className="status-chip">
+        <span className="status-chip-label">推荐网卡</span>
+        <span className="status-chip-value">
+          {status.recommended_interfaces.length > 0 ? status.recommended_interfaces.join(" / ") : "-"}
+        </span>
+      </span>
+      <span className="status-chip-divider">|</span>
+      <span className="status-chip">
+        <span className="status-chip-label">可用网卡</span>
+        <span className="status-chip-value">{status.available_interfaces.length}</span>
       </span>
       <span className="status-chip-divider">|</span>
       <span className="status-chip">
@@ -251,6 +435,14 @@ function SystemStatusBar({ status, error }: { status: SystemStatus; error: strin
         <button
           type="button"
           className="status-extra-toggle"
+          onClick={() => setSelectorOpen(true)}
+          title="切换监控网卡"
+        >
+          切换网卡
+        </button>
+        <button
+          type="button"
+          className="status-extra-toggle"
           onClick={() => setTipsOpen((v) => !v)}
           title="查看详情"
         >
@@ -259,6 +451,8 @@ function SystemStatusBar({ status, error }: { status: SystemStatus; error: strin
         {tipsOpen ? (
           <div className="status-extra-dropdown">
             <div>最新网卡：{status.latest_interface ? displayInterfaceName(status.latest_interface) : "-"}</div>
+            <div>环境默认：{displayInterfaceName(status.configured_interface)}</div>
+            <div>当前选择：{displayInterfaceName(status.selected_interface ?? "-")}</div>
             <div>采集间隔：{status.collect_interval}s</div>
             <div>距上次采集：{status.seconds_since_last_record ?? "-"}s</div>
             <div>
@@ -273,7 +467,7 @@ function SystemStatusBar({ status, error }: { status: SystemStatus; error: strin
             </div>
             {mismatch ? (
               <div style={{ color: "var(--color-warning)", marginTop: 6 }}>
-                配置网卡 {status.configured_interface} 未在系统网卡列表中发现。
+                当前监控网卡 {currentMonitoredInterface(status)} 未在系统网卡列表中发现。
               </div>
             ) : null}
             <div className="system-tips-collapse">
@@ -300,6 +494,11 @@ function SystemStatusBar({ status, error }: { status: SystemStatus; error: strin
           </div>
         ) : null}
       </span>
+      <InterfaceSelectorModal
+        open={selectorOpen}
+        onClose={() => setSelectorOpen(false)}
+        onSelected={onInterfaceChanged}
+      />
     </div>
   );
 }
@@ -585,7 +784,8 @@ function DashboardPage({
   refreshSignal,
   refreshing,
   lastRefreshTime,
-  onOpenHistory
+  onOpenHistory,
+  onInterfaceChanged
 }: {
   summary: Summary;
   realtime: RealtimePoint[];
@@ -600,6 +800,7 @@ function DashboardPage({
   refreshing: boolean;
   lastRefreshTime: Date | null;
   onOpenHistory: () => void;
+  onInterfaceChanged: () => void;
 }) {
   return (
     <div className={`dashboard-shell ${refreshing ? "refreshing-data" : ""}`}>
@@ -613,7 +814,7 @@ function DashboardPage({
           onRefreshAll={onRefreshAll}
           refreshing={refreshing}
         />
-        <SystemStatusBar status={systemStatus} error={systemStatusError} />
+        <SystemStatusBar status={systemStatus} error={systemStatusError} onInterfaceChanged={onInterfaceChanged} />
 
 
         <SpeedOverview summary={summary} />
@@ -933,7 +1134,7 @@ function HistoryList({
       })}
       {!loading && items.length === 0 ? (
         <div className="compact-empty">
-          <span>{getPeriodEmptyText(period)}</span>
+          <span>{systemStatus.selected_interface ? "当前网卡暂无历史数据" : getPeriodEmptyText(period)}</span>
           <DiagnosticsCollapsible status={systemStatus} />
         </div>
       ) : null}
@@ -1101,7 +1302,7 @@ function HistoryChart({
       <div className="history-chart" ref={chartRef} />
       {items.length === 0 ? (
         <div className="empty-chart with-diagnostics">
-          <span>暂无历史图表数据</span>
+          <span>{systemStatus?.selected_interface ? "当前网卡暂无历史数据" : "暂无历史图表数据"}</span>
           {systemStatus ? <DiagnosticsTips status={systemStatus} compact /> : null}
         </div>
       ) : null}
@@ -1359,7 +1560,7 @@ function HistoryPage({
                 {!loading && items.length === 0 ? (
                   <tr>
                     <td className="empty-row" colSpan={5}>
-                      <span>{getPeriodEmptyText(period)}</span>
+                      <span>{systemStatus.selected_interface ? "当前网卡暂无历史数据" : getPeriodEmptyText(period)}</span>
                       <DiagnosticsTips status={systemStatus} compact />
                     </td>
                   </tr>
@@ -1472,6 +1673,7 @@ function App() {
           refreshing={manualRefreshing}
           lastRefreshTime={lastRefreshTime}
           onOpenHistory={() => navigate("/history")}
+          onInterfaceChanged={() => void refreshAllData()}
         />
       ) : (
         <>

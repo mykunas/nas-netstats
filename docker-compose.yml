@@ -16,7 +16,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-nasnetstats}:${POSTGRES_PASSWORD:-please_change_this_password}@postgres:5432/${POSTGRES_DB:-nasnetstats}
       APP_TIMEZONE: ${TZ:-Asia/Shanghai}
-      NAS_INTERFACE: ${NAS_INTERFACE:-all}
+      NAS_INTERFACE: ${NAS_INTERFACE:-auto}
       COLLECT_INTERVAL: ${COLLECT_INTERVAL:-5}
       TZ: ${TZ:-Asia/Shanghai}
     depends_on:
@@ -31,7 +31,7 @@ services:
       context: ./collector
     network_mode: host
     environment:
-      NAS_INTERFACE: ${NAS_INTERFACE:-all}
+      NAS_INTERFACE: ${NAS_INTERFACE:-auto}
       COLLECT_INTERVAL: ${COLLECT_INTERVAL:-5}
       BACKEND_API: ${BACKEND_API:-http://127.0.0.1:8000}
       TZ: ${TZ:-Asia/Shanghai}

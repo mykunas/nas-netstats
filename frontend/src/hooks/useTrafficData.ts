@@ -21,12 +21,15 @@ export const emptySystemStatus: SystemStatus = {
   backend_status: "ok",
   database_status: "disconnected",
   collector_status: "no_data",
-  configured_interface: "all",
+  configured_interface: "auto",
+  selected_interface: null,
   latest_interface: null,
   latest_record_time: null,
   seconds_since_last_record: null,
   total_records: 0,
   available_interfaces: [],
+  recommended_interfaces: [],
+  ignored_interfaces: [],
   monitored_interfaces: [],
   collect_interval: 5
 };
